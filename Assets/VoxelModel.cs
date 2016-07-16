@@ -1,7 +1,6 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
-using System;
 
 [ExecuteInEditMode]
 public class VoxelModel : MonoBehaviour {
@@ -28,6 +27,7 @@ public class VoxelModel : MonoBehaviour {
             this.z = z;
         }
         public Address(Address other) : this(other.x, other.y, other.z) { }
+        public Address(Vector3 vector) : this(Mathf.FloorToInt(vector.x), Mathf.FloorToInt(vector.y), Mathf.FloorToInt(vector.z)) { }
     }
 
     public class Brush {
@@ -88,20 +88,10 @@ public class VoxelModel : MonoBehaviour {
         }
 
         public Chunk(Chunk other) {
+            //texture = Texture3D.Instantiate(other.texture);
+            texture = CreateTexture();
+            Graphics.CopyTexture(other.texture, texture);
             count = other.count;
-            texture = Texture3D.Instantiate(other.texture);
-        }
-    }
-
-    public struct UndoData {
-        private readonly Address address;
-        public Address Address { get { return address; } }
-        private readonly Chunk chunk;
-        public Chunk Chunk { get { return chunk; } }
-
-        public UndoData(Address address, Chunk chunk) {
-            this.address = new Address(address);
-            this.chunk = new Chunk(chunk);
         }
     }
 
@@ -122,7 +112,7 @@ public class VoxelModel : MonoBehaviour {
     private GameObject controllerManagerObject;
     public GameObject ControllerManagerObject { get { return controllerManagerObject; } set { controllerManagerObject = value; } }
 
-    private Matrix4x4 voxelMatrix;
+    private Matrix4x4 localToVoxelMatrix;
     private Dictionary<Address, Chunk> chunks;
     private Dictionary<Address, GameObject> chunkObjects;
     private Mesh chunkMesh;
@@ -133,10 +123,10 @@ public class VoxelModel : MonoBehaviour {
     private ComputeBuffer brushMatrixBuffer;
     private Stack<Dictionary<Address, Chunk>> undoStack;
     private Stack<Dictionary<Address, Chunk>> redoStack;
-    private Dictionary<Address, Chunk> undoList = null;
+    private Dictionary<Address, Chunk> undoStep = null;
 
-    void Start() {
-        voxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE));
+    public void Start() {
+        localToVoxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)).inverse;
 
         undoStack = new Stack<Dictionary<Address, Chunk>>();
         redoStack = new Stack<Dictionary<Address, Chunk>>();
@@ -175,33 +165,47 @@ public class VoxelModel : MonoBehaviour {
         brushComputePaint = brushCompute.FindKernel("Paint");
     }
 
-    void Input() {
+    private int TouchpadButton(SteamVR_Controller.Device controller) {
+        if (controller.GetPressUp(SteamVR_Controller.ButtonMask.Touchpad)) {
+            Vector2 axis = controller.GetAxis(Valve.VR.EVRButtonId.k_EButton_Axis0);
+            const float deadCentreThreshold = 0.1f;
+            if (axis.magnitude > deadCentreThreshold) {
+                if (axis.y < 0.0f) {
+                    if (axis.x < 0.0f) return 1;
+                    else if (axis.x > 0.0f) return 2;
+                }
+                else if (axis.y > 0.0f) {
+                    if (axis.x < 0.0f) return 3;
+                    else if (axis.x > 0.0f) return 4;
+                }
+            }
+        }
+        return 0;
+    }
+
+    private void Input() {
         SteamVR_ControllerManager controllerManager = controllerManagerObject.GetComponent<SteamVR_ControllerManager>();
 
         SteamVR_Controller.Device leftController = null;
         int leftIndex = (int)controllerManager.left.GetComponent<SteamVR_TrackedObject>().index;
         if (leftIndex != -1 && (leftController = SteamVR_Controller.Input(leftIndex)) != null) {
             float strength = leftController.GetAxis(Valve.VR.EVRButtonId.k_EButton_Axis1).x;
-            if (leftController.GetPressDown(SteamVR_Controller.ButtonMask.Trigger)) {
+            const float paintThreshold = 0.1f;
+            if (leftController.GetTouchDown(SteamVR_Controller.ButtonMask.Trigger)) {
                 print("UNDO START!");
-                BeginUndoList();
+                UndoStepBegin();
             }
-            if (leftController.GetPressUp(SteamVR_Controller.ButtonMask.Trigger)) {
-                EndUndoList();
-                print("UNDO FINISH!");
+            if (leftController.GetTouchUp(SteamVR_Controller.ButtonMask.Trigger)) {
+                print("UNDO FINISH! " + undoStep.Count);
+                UndoStepEnd();
             }
-            if (strength > 0.1) {
+            if (strength >= paintThreshold) {
                 Vector4 pos = controllerManager.left.GetComponent<Transform>().position;
                 Paint(pos, 8, new Color(1.0f, 0.0f, 0.0f, 1.0f), strength);
             }
-            if (leftController.GetPress(SteamVR_Controller.ButtonMask.Touchpad)) {
-                Vector2 axis = leftController.GetAxis(Valve.VR.EVRButtonId.k_EButton_Axis0);
-                if (axis.y < 0.0f) {
-                    if (axis.x < 0.0f) Undo();
-                    else if (axis.x > 0.0f) Redo();
-                }
-                else if (axis.y > 0.0f) {
-                }
+            switch (TouchpadButton(leftController)) {
+                case 1: if (CanUndo) Undo(); break;
+                case 2: if (CanRedo) Redo(); break;
             }
         }
 
@@ -211,65 +215,43 @@ public class VoxelModel : MonoBehaviour {
         }
     }
 
-    void Update() {
+    public void Update() {
         Input();
     }
 
-    private Address WorldToVoxel(Vector3 world) {
-        return new Address(Util.DivDown(world.x, VOXEL_SIZE), Util.DivDown(world.y, VOXEL_SIZE), Util.DivDown(world.z, VOXEL_SIZE));
+    private void UndoStepBegin() {
+        undoStep = new Dictionary<Address, Chunk>();
     }
 
-    private int LinearizeVoxelAddress(Address voxel) {
-        return voxel.Z * CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE +
-               voxel.Y * CHUNK_VOXEL_SIZE +
-               voxel.X;
-    }
-
-    private void BeginUndoList() {
-        undoList = new Dictionary<Address, Chunk>();
-    }
-
-    private void EndUndoList() {
-        if (undoList.Count > 0) {
+    private void UndoStepEnd() {
+        if (undoStep.Count > 0) {
+            undoStack.Push(undoStep);
             redoStack.Clear();
-            undoStack.Push(undoList);
         }
-        undoList = null;
+        undoStep = null;
     }
 
-    private void AddToUndoList(Address address, Chunk chunk) {
-        if (undoList != null && !undoList.ContainsKey(address)) undoList.Add(address, new Chunk(chunk));
+    private void UndoStepCopyChunk(Address address, Chunk chunk) {
+        if (undoStep != null && !undoStep.ContainsKey(address)) {
+            undoStep.Add(address, new Chunk(chunk));
+        }
     }
 
-    private bool Undo() {
-        if (undoList == null && undoStack.Count > 0) {
-            print("UNDO! " + undoStack.Count + ", " + redoStack.Count);
-            Dictionary<Address, Chunk> undoList = undoStack.Pop();
-            Dictionary<Address, Chunk> redoList = new Dictionary<Address, Chunk>();
-            foreach (KeyValuePair<Address, Chunk> entry in undoList) {
-                redoList.Add(entry.Key, chunks[entry.Key]);
-                AddChunk(entry.Key, entry.Value);
-            }
-            redoStack.Push(redoList);
-            return true;
+    private void UndoRedo(Stack<Dictionary<Address, Chunk>> fromStack, Stack<Dictionary<Address, Chunk>> toStack) {
+        Dictionary<Address, Chunk> fromStep = fromStack.Pop();
+        Dictionary<Address, Chunk> toStep = new Dictionary<Address, Chunk>();
+        foreach (KeyValuePair<Address, Chunk> entry in fromStep) {
+            toStep.Add(entry.Key, chunks[entry.Key]);
+            AddChunk(entry.Key, entry.Value);
         }
-        return false;
+        toStack.Push(toStep);
     }
 
-    private bool Redo() {
-        if (undoList == null && redoStack.Count > 0) {
-            print("REDO! " + undoStack.Count + ", " + redoStack.Count);
-            Dictionary<Address, Chunk> redoList = redoStack.Pop();
-            Dictionary<Address, Chunk> undoList = new Dictionary<Address, Chunk>();
-            foreach (KeyValuePair<Address, Chunk> entry in redoList) {
-                undoList.Add(entry.Key, chunks[entry.Key]);
-                AddChunk(entry.Key, entry.Value);
-            }
-            undoStack.Push(undoList);
-            return true;
-        }
-        return false;
-    }
+    private bool CanUndo { get { return this.undoStep == null && undoStack.Count > 0; } }
+    private void Undo() { UndoRedo(undoStack, redoStack); }
+
+    private bool CanRedo { get { return this.undoStep == null && redoStack.Count > 0; } }
+    private void Redo() { UndoRedo(redoStack, undoStack); }
 
     private Chunk AddChunk(Address address, Chunk chunk = null) {
         if (chunk == null) chunk = new Chunk();
@@ -308,8 +290,7 @@ public class VoxelModel : MonoBehaviour {
         countBuffer.SetData(countBufferData);
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);
 
-        //BeginUndoList();
-        Address voxelAddress = WorldToVoxel(pos);
+        Address voxelAddress = new Address(localToVoxelMatrix.MultiplyPoint3x4(transform.worldToLocalMatrix.MultiplyPoint3x4(pos)));
         Address chunkAddress;
         int x0 = Util.DivDown(pos.x - radius, CHUNK_SIZE);
         int x1 = Util.DivDown(pos.x + radius, CHUNK_SIZE);
@@ -333,15 +314,14 @@ public class VoxelModel : MonoBehaviour {
                     brushCompute.SetTexture(brushComputePaint, "In", texture);
                     Vector4 brushVector = new Vector4(chunkVoxelAddress.X, chunkVoxelAddress.Y, chunkVoxelAddress.Z);
                     brushCompute.SetVector("BrushVector", brushVector);
+                    UndoStepCopyChunk(chunkAddress, chunk);
                     brushCompute.Dispatch(brushComputePaint, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE);
-                    AddToUndoList(chunkAddress, chunk);
+                    UndoStepCopyChunk(chunkAddress, chunk);
                     Graphics.CopyTexture(workBuffer, texture);
                 }
             }
         }
-        //EndUndoList();
         countBuffer.GetData(countBufferData);
-        print(countBufferData[0]);
         countBuffer.Release();
     }
 }

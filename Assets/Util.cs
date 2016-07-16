@@ -1,4 +1,5 @@
 ﻿using System;
+using UnityEngine;
 
 static class Util {
     public static int Mod(int dividend, int divisor) {
@@ -12,5 +13,13 @@ static class Util {
 
     public static int DivDown(float dividend, float divisor) {
         return (int)Math.Floor(dividend / divisor);
+    }
+}
+
+namespace Extensions {
+    public static class Vector3Extensions {
+        public static Vector3 floor(this Vector3 vector) {
+            return new Vector3(Mathf.Floor(vector.x), Mathf.Floor(vector.y), Mathf.Floor(vector.z));
+        }
     }
 }
