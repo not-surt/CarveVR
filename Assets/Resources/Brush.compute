@@ -26,5 +26,7 @@ void Paint(const uint3 id : SV_DispatchThreadID)
 	const float alpha = BrushColour.a;
 	const float alphaSum = In[id].a + BrushColour.a;
 	//Out[id] = lerp(In[id], alpha * In[id] + (1.0 - alpha) * BrushColour, weight);
-	Out[id] = lerp(In[id], (In[id] * In[id].a / alphaSum) + (BrushColour * BrushColour.a / alphaSum), weight);
+	//Out[id] = lerp(In[id], (In[id] * In[id].a / alphaSum) + (BrushColour * BrushColour.a / alphaSum), weight);
+	//Out[id] = distance(BrushVector.xyz, id + VoxelSamplePosition) <= BrushRadius ? BrushColour : In[id];
+	Out[id] = lerp(BrushColour, In[id], distance(BrushVector.xyz, id + VoxelSamplePosition) / BrushRadius);
 }

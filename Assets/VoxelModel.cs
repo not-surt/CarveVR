@@ -125,6 +125,8 @@ public class VoxelModel : MonoBehaviour {
     private Stack<Dictionary<Address, Chunk>> redoStack;
     private Dictionary<Address, Chunk> undoStep = null;
     private bool painting = false;
+    public List<Color> palette;
+    public int colour = 0;
 
     public void Start() {
         localToVoxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)).inverse;
@@ -148,6 +150,19 @@ public class VoxelModel : MonoBehaviour {
         chunkMesh.SetUVs(0, voxels);
         chunkMesh.bounds = new Bounds(CHUNK_BOUNDS_CENTRE, CHUNK_BOUNDS_SIZE);
         chunkMesh.SetIndices(Enumerable.Range(0, chunkMesh.vertexCount).ToArray(), MeshTopology.Points, 0);
+
+        palette = new List<Color>();
+        palette.Add(new Color(0.0f, 0.0f, 0.0f));
+        palette.Add(new Color(0.25f, 0.25f, 0.25f));
+        palette.Add(new Color(0.5f, 0.5f, 0.5f));
+        palette.Add(new Color(0.75f, 0.75f, 0.75f));
+        palette.Add(new Color(1.0f, 1.0f, 1.0f));
+        palette.Add(new Color(1.0f, 0.0f, 0.0f));
+        palette.Add(new Color(1.0f, 1.0f, 0.0f));
+        palette.Add(new Color(0.0f, 1.0f, 0.0f));
+        palette.Add(new Color(0.0f, 1.0f, 1.0f));
+        palette.Add(new Color(0.0f, 0.0f, 1.0f));
+        palette.Add(new Color(1.0f, 0.0f, 1.0f));
 
         chunkMaterial = new Material(Shader.Find("CarveVR/Voxel"));
         chunkMaterial.SetFloat("_ChunkSize", CHUNK_SIZE);
@@ -190,25 +205,35 @@ public class VoxelModel : MonoBehaviour {
         SteamVR_Controller.Device leftController = null;
         int leftIndex = (int)controllerManager.left.GetComponent<SteamVR_TrackedObject>().index;
         if (leftIndex != -1 && (leftController = SteamVR_Controller.Input(leftIndex)) != null) {
+            switch (TouchpadButton(leftController)) {
+                case 1: if (CanUndo) Undo(); break;
+                case 2: if (CanRedo) Redo(); break;
+                case 3: if (--colour < 0) colour += palette.Count; break;
+                case 4: if (++colour >= palette.Count) colour -= palette.Count; break;
+            }
+
+            const float paintThreshold = 0.05f;
             float strength = leftController.GetAxis(Valve.VR.EVRButtonId.k_EButton_Axis1).x;
-            const float paintThreshold = 0.1f;
-            if (leftController.GetTouchDown(SteamVR_Controller.ButtonMask.Trigger)) {
-                print("UNDO START!");
+            float interpolatedStrength = Mathf.Lerp(0.0f, 1.0f, strength - paintThreshold);
+            //if (leftController.GetTouchDown(SteamVR_Controller.ButtonMask.Trigger)) {
+            if (strength >= paintThreshold) {
                 painting = true;
                 UndoStepBegin();
             }
-            if (leftController.GetTouchUp(SteamVR_Controller.ButtonMask.Trigger)) {
-                print("UNDO FINISH! " + undoStep.Count);
+            //if (leftController.GetTouchUp(SteamVR_Controller.ButtonMask.Trigger)) {
+            if (painting && strength < paintThreshold) {
                 painting = false;
                 UndoStepEnd();
             }
             if (painting) {
                 Vector4 pos = controllerManager.left.GetComponent<Transform>().position;
-                Paint(pos, 8, new Color(1.0f, 0.0f, 0.0f, 1.0f), strength);
+                Paint(pos, 8, palette[colour], interpolatedStrength);
             }
-            switch (TouchpadButton(leftController)) {
-                case 1: if (CanUndo) Undo(); break;
-                case 2: if (CanRedo) Redo(); break;
+
+            if (leftController.GetPressUp(SteamVR_Controller.ButtonMask.ApplicationMenu)) {
+                System.Text.StringBuilder stringBuilder = new System.Text.StringBuilder(256);
+                SteamVR.instance.overlay.GetKeyboardText(stringBuilder, 256);
+                print(stringBuilder.ToString());
             }
         }
 
@@ -319,7 +344,6 @@ public class VoxelModel : MonoBehaviour {
                     brushCompute.SetVector("BrushVector", brushVector);
                     UndoStepCopyChunk(chunkAddress, chunk);
                     brushCompute.Dispatch(brushComputePaint, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE);
-                    //UndoStepCopyChunk(chunkAddress, chunk);
                     Graphics.CopyTexture(workBuffer, texture);
                 }
             }
