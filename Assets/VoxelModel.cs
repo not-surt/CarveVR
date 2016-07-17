@@ -124,6 +124,7 @@ public class VoxelModel : MonoBehaviour {
     private Stack<Dictionary<Address, Chunk>> undoStack;
     private Stack<Dictionary<Address, Chunk>> redoStack;
     private Dictionary<Address, Chunk> undoStep = null;
+    private bool painting = false;
 
     public void Start() {
         localToVoxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)).inverse;
@@ -193,13 +194,15 @@ public class VoxelModel : MonoBehaviour {
             const float paintThreshold = 0.1f;
             if (leftController.GetTouchDown(SteamVR_Controller.ButtonMask.Trigger)) {
                 print("UNDO START!");
+                painting = true;
                 UndoStepBegin();
             }
             if (leftController.GetTouchUp(SteamVR_Controller.ButtonMask.Trigger)) {
                 print("UNDO FINISH! " + undoStep.Count);
+                painting = false;
                 UndoStepEnd();
             }
-            if (strength >= paintThreshold) {
+            if (painting) {
                 Vector4 pos = controllerManager.left.GetComponent<Transform>().position;
                 Paint(pos, 8, new Color(1.0f, 0.0f, 0.0f, 1.0f), strength);
             }
@@ -316,7 +319,7 @@ public class VoxelModel : MonoBehaviour {
                     brushCompute.SetVector("BrushVector", brushVector);
                     UndoStepCopyChunk(chunkAddress, chunk);
                     brushCompute.Dispatch(brushComputePaint, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE);
-                    UndoStepCopyChunk(chunkAddress, chunk);
+                    //UndoStepCopyChunk(chunkAddress, chunk);
                     Graphics.CopyTexture(workBuffer, texture);
                 }
             }
