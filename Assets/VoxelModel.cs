@@ -133,6 +133,19 @@ public class VoxelModel : MonoBehaviour {
     private bool painting = false;
     public List<Color> palette;
     public int colour = 0;
+    static readonly private int[,] paletteData = new int[11, 3]{
+        { 255,   0,   0 },
+        { 255, 255,   0 },
+        {   0, 255,   0 },
+        {   0, 255, 255 },
+        {   0,   0, 255 },
+        { 255,   0, 255 },
+        {   0,   0,   0 },
+        {  63,  63,  63 },
+        { 127, 127, 127 },
+        { 191, 191, 191 },
+        { 255, 255, 255 },
+    };
 
     public void Start() {
         localToVoxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)).inverse;
@@ -158,17 +171,9 @@ public class VoxelModel : MonoBehaviour {
         chunkMesh.SetIndices(Enumerable.Range(0, chunkMesh.vertexCount).ToArray(), MeshTopology.Points, 0);
 
         palette = new List<Color>();
-        palette.Add(new Color(0.0f, 0.0f, 0.0f));
-        palette.Add(new Color(0.25f, 0.25f, 0.25f));
-        palette.Add(new Color(0.5f, 0.5f, 0.5f));
-        palette.Add(new Color(0.75f, 0.75f, 0.75f));
-        palette.Add(new Color(1.0f, 1.0f, 1.0f));
-        palette.Add(new Color(1.0f, 0.0f, 0.0f));
-        palette.Add(new Color(1.0f, 1.0f, 0.0f));
-        palette.Add(new Color(0.0f, 1.0f, 0.0f));
-        palette.Add(new Color(0.0f, 1.0f, 1.0f));
-        palette.Add(new Color(0.0f, 0.0f, 1.0f));
-        palette.Add(new Color(1.0f, 0.0f, 1.0f));
+        for (int index = 0; index < paletteData.GetLength(0); ++index) {
+            palette.Add(new Color((float)paletteData[index, 0] / 255.0f, (float)paletteData[index, 1] / 255.0f, (float)paletteData[index, 2] / 255.0f));
+        }
 
         chunkMaterial = new Material(Shader.Find("CarveVR/Voxel"));
         chunkMaterial.SetFloat("_ChunkSize", CHUNK_SIZE);
@@ -185,6 +190,7 @@ public class VoxelModel : MonoBehaviour {
 
         emptyTexture = Chunk.CreateTexture();
         emptyTexture.SetPixels32(Enumerable.Repeat<Color32>(new Color32(0, 0, 0, 0), CHUNK_VOXELS).ToArray());
+        emptyTexture.Apply();
 
         brushCompute = Resources.Load("Brush") as ComputeShader;
         brushComputePaint = brushCompute.FindKernel("Paint");
@@ -309,6 +315,15 @@ public class VoxelModel : MonoBehaviour {
             renderer.sharedMaterial = chunkMaterial;
             MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
             propertyBlock.SetTexture("_Data", chunk.Texture);
+            //Texture3D[,,] neighborhood = new Texture3D[3, 3, 3];
+            //for (int z = -1; z <= 1; ++z) {
+            //    for (int y = -1; y <= 1; ++y) {
+            //        for (int x = -1; x <= 1; ++x) {
+            //            Address address = new Address(x, y, z);
+            //            neighborhood[x + 1, y + 1, z + 1] = chunks.ContainsKey(address) ? chunks[address].Texture : null;
+            //        }
+            //    }
+            //}
             renderer.SetPropertyBlock(propertyBlock);
             chunkObjects[address] = gameObject;
             chunks[address] = chunk;
@@ -317,10 +332,10 @@ public class VoxelModel : MonoBehaviour {
 
     private void Paint(Vector3 pos, float radius, Color colour, float strength) {
         radius = radius * strength;
-        ComputeBuffer countBuffer = new ComputeBuffer(1, sizeof(uint));
         brushCompute.SetFloat("BrushRadius", radius / VOXEL_SIZE);
         brushCompute.SetVector("BrushColour", colour);
         brushCompute.SetTexture(brushComputePaint, "Out", workBuffer);
+        ComputeBuffer countBuffer = new ComputeBuffer(1, sizeof(uint));
         uint[] countBufferData = { 0 };
         countBuffer.SetData(countBufferData);
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);

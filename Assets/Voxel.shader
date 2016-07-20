@@ -20,6 +20,8 @@
 			const int _ChunkVoxelSize;
 			const float _Threshold;
 			Texture3D _Data;
+			Texture3D _Neighborhood[3][3][3];
+			bool _NeighborPresent[3][3][3];
 
 			#define METHOD_BLOCKS 0
 			#define METHOD_MARCHING_CUBES 1
@@ -60,11 +62,15 @@
 						neighbourhood += (_Data.Load(int4(voxel + neighbours[i], 0)).a > 1.0 - _Threshold) ? 1 : 0;
 					}
 				}
-				OUT.boundary = (OUT.colour.a > 1.0 - _Threshold && neighbourhood < 8) ? true : false;
+				OUT.boundary = (OUT.colour.a > (1.0 - _Threshold) && neighbourhood < 8) ? true : false;
 				return OUT;
 			}
 
 			Vertex vertices[24];
+
+			float isolevelPosition(const float a, const float b, const float isolevel) {
+				return (isolevel - a) / (b - a);
+			}
 
 			void blocksVoxel(const Vertex IN, const float size, inout TriangleStream<Vertex> stream) {
 				const int3 corners[8] = {
@@ -93,11 +99,18 @@
 					int3(-1, 0, 0),
 					int3(1, 0, 0),
 				};
-				if (IN.boundary) {
+				//if (IN.boundary) {
+				if (IN.colour.a >= _Threshold) {
 					Vertex OUT;
 					OUT.voxel = IN.voxel;
-					OUT.colour = IN.colour;
+					OUT.colour = float4(IN.colour.rgb, 1.0);
 					OUT.boundary = IN.boundary;
+					for (int boundary = 0; boundary < 6; ++boundary) {
+						const float position = isolevelPosition(_Data.Load(int4(IN.voxel, 0)).a, _Data.Load(int4(IN.voxel + boundaries[boundary], 0)).a, _Threshold);
+						if (position >= 0.0 && position <= 1.0) {
+
+						}
+					}
 					for (int side = 0; side < 6; ++side) {
 						/*const float3 ab = corners[sides[side * 4 + 1]] - corners[sides[side * 4 + 0]];
 						const float3 ac = corners[sides[side * 4 + 3]] - corners[sides[side * 4 + 0]];
@@ -140,7 +153,7 @@
 			}
 
 			fixed4 fragmentShader(Vertex IN) : SV_Target {
-				return float4(IN.colour.rgb, 1.0);
+				return IN.colour;
 			}
 
 			ENDCG

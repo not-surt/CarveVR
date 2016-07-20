@@ -5,7 +5,7 @@
 float4 BrushVector;
 float BrushRadius = 2;
 float4 BrushColour = float4(1.0, 0.0, 0.0, 1.0);
-float3 VoxelSamplePosition = float3(0.5, 0.5, 0.5);
+const float3 VoxelSamplePosition = float3(0.5, 0.5, 0.5);
 float4x4 BrushMatrix;
 RWStructuredBuffer<uint> Count;
 Texture3D<float4> In;
@@ -14,19 +14,13 @@ RWTexture3D<float4> Out;
 [numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
 void Paint(const uint3 id : SV_DispatchThreadID)
 {
-	InterlockedAdd(Count[0], 1);
-	//Result[id] = lerp(In[id], BrushColour, step(distance(BrushVector.xyz, id + float3(0.5, 0.5, 0.5)), BrushRadius));
-	const float dist = distance(BrushVector.xyz, id + VoxelSamplePosition);
-	//const float weight = clamp((1.0 - dist / BrushRadius) * BrushColour.a, 0.0, 1.0);
-	//Result[id] = lerp(In[id], BrushColour, weight);
-	//Out[id] = float4((In[id].rgb * In[id].a + BrushColour.rgb * weight) / (In[id].a + weight), clamp(In[id].a + weight, 0.0, 1.0));
-	//Out[id] = float4(1.0, 0.0, 0.0, clamp(1.0 - dist / BrushRadius, 0.0, 1.0));
+	//InterlockedAdd(Count[0], 1);
+	
 	//color = alpha * src + (1 - alpha) * dest
-	const float weight = clamp(1.0 - dist / BrushRadius, 0.0, 1.0);
-	const float alpha = BrushColour.a;
-	const float alphaSum = In[id].a + BrushColour.a;
-	//Out[id] = lerp(In[id], alpha * In[id] + (1.0 - alpha) * BrushColour, weight);
-	//Out[id] = lerp(In[id], (In[id] * In[id].a / alphaSum) + (BrushColour * BrushColour.a / alphaSum), weight);
-	//Out[id] = distance(BrushVector.xyz, id + VoxelSamplePosition) <= BrushRadius ? BrushColour : In[id];
-	Out[id] = lerp(BrushColour, In[id], distance(BrushVector.xyz, id + VoxelSamplePosition) / BrushRadius);
+	const float dist = distance(BrushVector.xyz, id + VoxelSamplePosition);
+	const float weight = saturate(1.0 - (dist / BrushRadius)) * BrushColour.a;
+	const float alpha = weight;
+	const float3 rgb = alpha * BrushColour.rgb + (1.0 - alpha) * In[id].rgb;
+	const float a = alpha + (1.0 - alpha) * In[id].a;
+	Out[id] = float4(rgb, a);
 }
