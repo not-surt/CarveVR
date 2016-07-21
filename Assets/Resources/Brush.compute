@@ -14,13 +14,11 @@ RWTexture3D<float4> Out;
 [numthreads(THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE)]
 void Paint(const uint3 id : SV_DispatchThreadID)
 {
-	//InterlockedAdd(Count[0], 1);
-	
-	//color = alpha * src + (1 - alpha) * dest
-	const float dist = distance(BrushVector.xyz, id + VoxelSamplePosition);
-	const float weight = saturate(1.0 - (dist / BrushRadius)) * BrushColour.a;
-	const float alpha = weight;
-	const float3 rgb = alpha * BrushColour.rgb + (1.0 - alpha) * In[id].rgb;
-	const float a = alpha + (1.0 - alpha) * In[id].a;
-	Out[id] = float4(rgb, a);
+	InterlockedAdd(Count[0], 1);
+	const float falloff = saturate(1.0 - (distance(BrushVector.xyz, id + VoxelSamplePosition) / BrushRadius));
+	const float brushDensity = falloff * BrushColour.a;
+	const float inDensity = (1 - brushDensity) * In[id].a;
+	const float outDensity = brushDensity + inDensity;
+	const float3 outColour = (BrushColour.rgb * brushDensity + In[id].rgb * inDensity) / (outDensity);
+	Out[id] = float4(outColour, outDensity);
 }
