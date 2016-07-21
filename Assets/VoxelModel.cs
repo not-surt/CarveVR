@@ -8,7 +8,7 @@ public class VoxelModel : MonoBehaviour {
     const float CHUNK_HALF_SIZE = CHUNK_SIZE / 2.0f;
     readonly Vector3 CHUNK_BOUNDS_CENTRE = new Vector3(CHUNK_HALF_SIZE, CHUNK_HALF_SIZE, CHUNK_HALF_SIZE);
     readonly Vector3 CHUNK_BOUNDS_SIZE = new Vector3(CHUNK_HALF_SIZE, CHUNK_HALF_SIZE, CHUNK_HALF_SIZE);
-    const int CHUNK_DEPTH = 4;
+    const int CHUNK_DEPTH = 5;
     const int CHUNK_VOXEL_SIZE = (int)(0x1u << CHUNK_DEPTH);
     const int CHUNK_VOXELS = CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE;
     const float VOXEL_SIZE = CHUNK_SIZE / (float)CHUNK_VOXEL_SIZE;
@@ -108,8 +108,8 @@ public class VoxelModel : MonoBehaviour {
     }
 
     [SerializeField]
-    private float threshold = 0.5f;
-    public float Threshold { get { return threshold; } set { threshold = value; } }
+    private float isolevel = 0.5f;
+    public float Isolevel { get { return isolevel; } set { isolevel = value; } }
     [SerializeField]
     private VoxelMethod method = VoxelMethod.Blocks;
     public VoxelMethod Method { get { return method; } set { method = value; } }
@@ -175,10 +175,9 @@ public class VoxelModel : MonoBehaviour {
             palette.Add(new Color((float)paletteData[index, 0] / 255.0f, (float)paletteData[index, 1] / 255.0f, (float)paletteData[index, 2] / 255.0f));
         }
 
-        chunkMaterial = new Material(Shader.Find("CarveVR/Voxel"));
+        chunkMaterial = new Material(Shader.Find("CarveVR/Chunk"));
         chunkMaterial.SetFloat("_ChunkSize", CHUNK_SIZE);
         chunkMaterial.SetInt("_ChunkVoxelSize", CHUNK_VOXEL_SIZE);
-        chunkMaterial.SetFloat("_Threshold", threshold);
         chunkMaterial.SetInt("_VoxelMethod", (int)method);
 
         workBuffer = new RenderTexture(CHUNK_VOXEL_SIZE, CHUNK_VOXEL_SIZE, 0);
@@ -230,12 +229,10 @@ public class VoxelModel : MonoBehaviour {
             const float paintThreshold = 0.05f;
             float strength = leftController.GetAxis(Valve.VR.EVRButtonId.k_EButton_Axis1).x;
             float interpolatedStrength = Mathf.Lerp(0.0f, 1.0f, strength - paintThreshold);
-            //if (leftController.GetTouchDown(SteamVR_Controller.ButtonMask.Trigger)) {
             if (!painting && strength >= paintThreshold) {
                 painting = true;
                 UndoStepBegin();
             }
-            //if (leftController.GetTouchUp(SteamVR_Controller.ButtonMask.Trigger)) {
             if (painting && strength < paintThreshold) {
                 painting = false;
                 UndoStepEnd();
@@ -255,11 +252,19 @@ public class VoxelModel : MonoBehaviour {
         SteamVR_Controller.Device rightController = null;
         int rightIndex = (int)controllerManager.right.GetComponent<SteamVR_TrackedObject>().index;
         if (rightIndex != -1 && (rightController = SteamVR_Controller.Input(rightIndex)) != null) {
+            switch (TouchpadButton(rightController)) {
+                case 1: break;
+                case 2: break;
+                case 3: if ((isolevel -= 0.1f) < 0.0f) isolevel += 1.0f; break;
+                case 4: if ((isolevel += 0.1f) >= 1.0f) isolevel -= 1.0f; break;
+            }
+
         }
     }
 
     public void Update() {
         Input();
+        chunkMaterial.SetFloat("_Isolevel", isolevel);
     }
 
     private void UndoStepBegin() {
@@ -340,7 +345,7 @@ public class VoxelModel : MonoBehaviour {
         countBuffer.SetData(countBufferData);
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);
 
-        Address voxelAddress = new Address(localToVoxelMatrix.MultiplyPoint3x4(transform.worldToLocalMatrix.MultiplyPoint3x4(pos)));
+        Vector3 voxelPos = localToVoxelMatrix.MultiplyPoint3x4(transform.worldToLocalMatrix.MultiplyPoint3x4(pos));
         int x0 = Util.DivDown(pos.x - radius, CHUNK_SIZE);
         int x1 = Util.DivDown(pos.x + radius, CHUNK_SIZE);
         int y0 = Util.DivDown(pos.y - radius, CHUNK_SIZE);
@@ -351,7 +356,7 @@ public class VoxelModel : MonoBehaviour {
             for (int y = y0; y <= y1; ++y) {
                 for (int x = x0; x <= x1; ++x) {
                     Address chunkAddress = new Address(x, y, z);
-                    Address chunkVoxelAddress = new Address(voxelAddress.X - chunkAddress.X * CHUNK_VOXEL_SIZE, voxelAddress.Y - chunkAddress.Y * CHUNK_VOXEL_SIZE, voxelAddress.Z - chunkAddress.Z * CHUNK_VOXEL_SIZE);
+                    Vector3 chunkVoxelPos = voxelPos - (new Vector3(x, y, z) * CHUNK_VOXEL_SIZE);
                     Chunk oldChunk = null;
                     Texture3D oldTexture = emptyTexture;
                     if (chunks.ContainsKey(chunkAddress)) {
@@ -363,8 +368,7 @@ public class VoxelModel : MonoBehaviour {
                     if (oldChunk != null) newChunk = new Chunk(oldChunk);
                     else newChunk = new Chunk();
                     brushCompute.SetTexture(brushComputePaint, "In", oldTexture);
-                    Vector4 brushVector = new Vector4(chunkVoxelAddress.X, chunkVoxelAddress.Y, chunkVoxelAddress.Z);
-                    brushCompute.SetVector("BrushVector", brushVector);
+                    brushCompute.SetVector("BrushVector", chunkVoxelPos);
                     brushCompute.Dispatch(brushComputePaint, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE);
                     Graphics.CopyTexture(workBuffer, newChunk.Texture);
                     SetChunk(chunkAddress, newChunk);

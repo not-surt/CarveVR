@@ -18,8 +18,11 @@ static class Util {
 
 namespace Extensions {
     public static class Vector3Extensions {
-        public static Vector3 floor(this Vector3 vector) {
+        public static Vector3 Floor(this Vector3 vector) {
             return new Vector3(Mathf.Floor(vector.x), Mathf.Floor(vector.y), Mathf.Floor(vector.z));
+        }
+        public static Vector3 Repeat(this Vector3 vector, Vector3 length) {
+            return new Vector3(Mathf.Repeat(vector.x, length.x), Mathf.Repeat(vector.y, length.y), Mathf.Repeat(vector.z, length.z));
         }
     }
 }

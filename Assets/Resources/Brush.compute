@@ -2,9 +2,9 @@
 
 #define THREAD_GROUP_SIZE 8
 
-float4 BrushVector;
-float BrushRadius = 2;
-float4 BrushColour = float4(1.0, 0.0, 0.0, 1.0);
+float3 BrushVector;
+float BrushRadius;
+float4 BrushColour;
 const float3 VoxelSamplePosition = float3(0.5, 0.5, 0.5);
 float4x4 BrushMatrix;
 RWStructuredBuffer<uint> Count;
