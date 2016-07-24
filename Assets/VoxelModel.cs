@@ -2,18 +2,16 @@
 using System.Collections.Generic;
 using System.Linq;
 
-[ExecuteInEditMode]
+//[ExecuteInEditMode]
 public class VoxelModel : MonoBehaviour {
     const float CHUNK_SIZE = 1.0f;
     const float CHUNK_HALF_SIZE = CHUNK_SIZE / 2.0f;
     readonly Vector3 CHUNK_BOUNDS_CENTRE = new Vector3(CHUNK_HALF_SIZE, CHUNK_HALF_SIZE, CHUNK_HALF_SIZE);
     readonly Vector3 CHUNK_BOUNDS_SIZE = new Vector3(CHUNK_HALF_SIZE, CHUNK_HALF_SIZE, CHUNK_HALF_SIZE);
-    const int CHUNK_DEPTH = 5;
+    const int CHUNK_DEPTH = 4;
     const int CHUNK_VOXEL_SIZE = (int)(0x1u << CHUNK_DEPTH);
     const int CHUNK_VOXELS = CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE;
     const float VOXEL_SIZE = CHUNK_SIZE / (float)CHUNK_VOXEL_SIZE;
-    const TextureFormat STORE_FORMAT = TextureFormat.ARGB32;
-    const RenderTextureFormat WORK_FORMAT = RenderTextureFormat.ARGB32;
     const int THREAD_GROUP_SIZE = 8;
 
     public struct Address {
@@ -73,33 +71,6 @@ public class VoxelModel : MonoBehaviour {
         }
     }
 
-    public class Chunk {
-        private readonly Texture3D texture;
-        public Texture3D Texture { get { return texture; } }
-        private readonly int count;
-        public int Count { get { return count; } }
-
-        public static Texture3D CreateTexture() {
-            return new Texture3D(CHUNK_VOXEL_SIZE, CHUNK_VOXEL_SIZE, CHUNK_VOXEL_SIZE, STORE_FORMAT, false);
-        }
-        public static GameObject CreateGameObject() {
-            return new GameObject();
-        }
-
-        public Chunk() {
-            texture = CreateTexture();
-            Graphics.CopyTexture(emptyTexture, texture);
-            count = 0;
-        }
-
-        public Chunk(Chunk other) {
-            //texture = Texture3D.Instantiate(other.texture);
-            texture = CreateTexture();
-            Graphics.CopyTexture(other.texture, texture);
-            count = other.count;
-        }
-    }
-
     public enum VoxelMethod {
         Blocks,
         MarchingCubes,
@@ -116,6 +87,11 @@ public class VoxelModel : MonoBehaviour {
     [SerializeField]
     private GameObject controllerManagerObject;
     public GameObject ControllerManagerObject { get { return controllerManagerObject; } set { controllerManagerObject = value; } }
+    [SerializeField]
+    private GameObject chunkManagerObject;
+    public GameObject ChunkManagerObject { get { return chunkManagerObject; } set { chunkManagerObject = value; } }
+
+    private ChunkManager chunkManager;
 
     private Matrix4x4 localToVoxelMatrix;
     private Dictionary<Address, Chunk> chunks;
@@ -126,13 +102,18 @@ public class VoxelModel : MonoBehaviour {
     private int brushComputePaint;
     private RenderTexture workBuffer;
     static private Texture3D emptyTexture;
+    private ComputeBuffer countBuffer;
     private ComputeBuffer brushMatrixBuffer;
+    private ComputeBuffer testingBuffer;
+    //private ComputeBuffer test;
     private Stack<Dictionary<Address, Chunk>> undoStack;
     private Stack<Dictionary<Address, Chunk>> redoStack;
     private Dictionary<Address, Chunk> undoStep = null;
     private bool painting = false;
-    public List<Color> palette;
-    public int colour = 0;
+    private Vector3 lastPaintPos;
+    private float lastPaintStrength;
+    private List<Color> palette;
+    private int colour = 0;
     static readonly private int[,] paletteData = new int[11, 3]{
         { 255,   0,   0 },
         { 255, 255,   0 },
@@ -148,6 +129,8 @@ public class VoxelModel : MonoBehaviour {
     };
 
     public void Start() {
+        chunkManager = new ChunkManager(CHUNK_VOXEL_SIZE);
+
         localToVoxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)).inverse;
 
         undoStack = new Stack<Dictionary<Address, Chunk>>();
@@ -179,20 +162,22 @@ public class VoxelModel : MonoBehaviour {
         chunkMaterial.SetFloat("_ChunkSize", CHUNK_SIZE);
         chunkMaterial.SetInt("_ChunkVoxelSize", CHUNK_VOXEL_SIZE);
         chunkMaterial.SetInt("_VoxelMethod", (int)method);
+        chunkMaterial.SetBuffer("edgeTable", ChunkManager.marchingCubesEdgeTable);
+        chunkMaterial.SetBuffer("triTable", ChunkManager.marchingCubesTriTable);
 
-        workBuffer = new RenderTexture(CHUNK_VOXEL_SIZE, CHUNK_VOXEL_SIZE, 0);
-        workBuffer.volumeDepth = CHUNK_VOXEL_SIZE;
-        workBuffer.dimension = UnityEngine.Rendering.TextureDimension.Tex3D;
-        workBuffer.format = WORK_FORMAT;
-        workBuffer.enableRandomWrite = true;
-        workBuffer.Create();
+        countBuffer = new ComputeBuffer(1, sizeof(uint));
 
-        emptyTexture = Chunk.CreateTexture();
-        emptyTexture.SetPixels32(Enumerable.Repeat<Color32>(new Color32(0, 0, 0, 0), CHUNK_VOXELS).ToArray());
-        emptyTexture.Apply();
+        workBuffer = ChunkManager.CreateRenderTexture(CHUNK_VOXEL_SIZE);
+
+        emptyTexture = ChunkManager.CreateEmptyTexture(CHUNK_VOXEL_SIZE);
 
         brushCompute = Resources.Load("Brush") as ComputeShader;
         brushComputePaint = brushCompute.FindKernel("Paint");
+    }
+
+    public void OnDestroy() {
+        chunkManager.Dispose();
+        countBuffer.Release();
     }
 
     private int TouchpadButton(SteamVR_Controller.Device controller) {
@@ -229,17 +214,26 @@ public class VoxelModel : MonoBehaviour {
             const float paintThreshold = 0.05f;
             float strength = leftController.GetAxis(Valve.VR.EVRButtonId.k_EButton_Axis1).x;
             float interpolatedStrength = Mathf.Lerp(0.0f, 1.0f, strength - paintThreshold);
+            bool firstPaint = false;
             if (!painting && strength >= paintThreshold) {
                 painting = true;
                 UndoStepBegin();
+                firstPaint = true;
             }
             if (painting && strength < paintThreshold) {
                 painting = false;
                 UndoStepEnd();
             }
+            const float radius = 0.25f;
+            const float spacing = radius * 0.5f;
+            float strengthSpacing = interpolatedStrength * 0.5f;
             if (painting) {
-                Vector4 pos = controllerManager.left.GetComponent<Transform>().position;
-                Paint(pos, 0.25f, palette[colour], interpolatedStrength);
+                Vector3 pos = controllerManager.left.GetComponent<Transform>().position;
+                if (firstPaint || Vector3.Distance(pos, lastPaintPos) >= spacing || Mathf.Abs(interpolatedStrength - lastPaintStrength) >= strengthSpacing) {
+                    Paint(pos, radius, palette[colour], interpolatedStrength);
+                    lastPaintPos = pos;
+                    lastPaintStrength = interpolatedStrength;
+                }
             }
 
             if (leftController.GetPressUp(SteamVR_Controller.ButtonMask.ApplicationMenu)) {
@@ -264,7 +258,7 @@ public class VoxelModel : MonoBehaviour {
 
     public void Update() {
         Input();
-        chunkMaterial.SetFloat("_Isolevel", isolevel);
+        chunkManager.material.SetFloat("_Isolevel", isolevel);
     }
 
     private void UndoStepBegin() {
@@ -310,27 +304,8 @@ public class VoxelModel : MonoBehaviour {
             chunkObjects.Remove(address);
         }
         if (chunk != null) {
-            GameObject gameObject = (GameObject)Instantiate(Resources.Load("Chunk"));
-            gameObject.transform.SetParent(this.transform);
-            gameObject.transform.position = new Vector3(address.X, address.Y, address.Z);
-            MeshFilter filter = gameObject.GetComponent<MeshFilter>();
-            filter.mesh = chunkMesh;
-            filter.mesh.bounds = new Bounds(CHUNK_BOUNDS_CENTRE, CHUNK_BOUNDS_SIZE);
-            MeshRenderer renderer = gameObject.GetComponent<MeshRenderer>();
-            renderer.sharedMaterial = chunkMaterial;
-            MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-            propertyBlock.SetTexture("_Data", chunk.Texture);
-            //Texture3D[,,] neighborhood = new Texture3D[3, 3, 3];
-            //for (int z = -1; z <= 1; ++z) {
-            //    for (int y = -1; y <= 1; ++y) {
-            //        for (int x = -1; x <= 1; ++x) {
-            //            Address address = new Address(x, y, z);
-            //            neighborhood[x + 1, y + 1, z + 1] = chunks.ContainsKey(address) ? chunks[address].Texture : null;
-            //        }
-            //    }
-            //}
-            renderer.SetPropertyBlock(propertyBlock);
-            chunkObjects[address] = gameObject;
+            GameObject chunkObject = chunkManager.CreateGameObject(chunk, gameObject, new Vector3(address.X, address.Y, address.Z));
+            chunkObjects[address] = chunkObject;
             chunks[address] = chunk;
         }
     }
@@ -340,7 +315,6 @@ public class VoxelModel : MonoBehaviour {
         brushCompute.SetFloat("BrushRadius", radius / VOXEL_SIZE);
         brushCompute.SetVector("BrushColour", colour);
         brushCompute.SetTexture(brushComputePaint, "Out", workBuffer);
-        ComputeBuffer countBuffer = new ComputeBuffer(1, sizeof(uint));
         uint[] countBufferData = { 0 };
         countBuffer.SetData(countBufferData);
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);
@@ -361,21 +335,20 @@ public class VoxelModel : MonoBehaviour {
                     Texture3D oldTexture = emptyTexture;
                     if (chunks.ContainsKey(chunkAddress)) {
                         oldChunk = chunks[chunkAddress];
-                        oldTexture = oldChunk.Texture;
+                        oldTexture = oldChunk.texture;
                     }
                     UndoStepAddChunk(chunkAddress, oldChunk);
                     Chunk newChunk;
                     if (oldChunk != null) newChunk = new Chunk(oldChunk);
-                    else newChunk = new Chunk();
+                    else newChunk = new Chunk(CHUNK_VOXEL_SIZE);
                     brushCompute.SetTexture(brushComputePaint, "In", oldTexture);
                     brushCompute.SetVector("BrushVector", chunkVoxelPos);
                     brushCompute.Dispatch(brushComputePaint, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE);
-                    Graphics.CopyTexture(workBuffer, newChunk.Texture);
+                    Graphics.CopyTexture(workBuffer, newChunk.texture);
                     SetChunk(chunkAddress, newChunk);
                 }
             }
         }
         countBuffer.GetData(countBufferData);
-        countBuffer.Release();
     }
 }
