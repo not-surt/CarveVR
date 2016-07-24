@@ -96,16 +96,11 @@ public class VoxelModel : MonoBehaviour {
     private Matrix4x4 localToVoxelMatrix;
     private Dictionary<Address, Chunk> chunks;
     private Dictionary<Address, GameObject> chunkObjects;
-    private Mesh chunkMesh;
-    private Material chunkMaterial;
     private ComputeShader brushCompute;
     private int brushComputePaint;
-    private RenderTexture workBuffer;
-    static private Texture3D emptyTexture;
     private ComputeBuffer countBuffer;
     private ComputeBuffer brushMatrixBuffer;
     private ComputeBuffer testingBuffer;
-    //private ComputeBuffer test;
     private Stack<Dictionary<Address, Chunk>> undoStack;
     private Stack<Dictionary<Address, Chunk>> redoStack;
     private Dictionary<Address, Chunk> undoStep = null;
@@ -137,39 +132,13 @@ public class VoxelModel : MonoBehaviour {
         redoStack = new Stack<Dictionary<Address, Chunk>>();
         chunks = new Dictionary<Address, Chunk>();
         chunkObjects = new Dictionary<Address, GameObject>();
-        chunkMesh = new Mesh();
-        List<Vector3> vertices = new List<Vector3>();
-        List<Vector3> voxels = new List<Vector3>();
-        for (int z = 0; z < CHUNK_VOXEL_SIZE; ++z) {
-            for (int y = 0; y < CHUNK_VOXEL_SIZE; ++y) {
-                for (int x = 0; x < CHUNK_VOXEL_SIZE; ++x) {
-                    vertices.Add(new Vector3(x * VOXEL_SIZE, y * VOXEL_SIZE, z * VOXEL_SIZE));
-                    voxels.Add(new Vector3(x, y, z));
-                }
-            }
-        }
-        chunkMesh.SetVertices(vertices);
-        chunkMesh.SetUVs(0, voxels);
-        chunkMesh.bounds = new Bounds(CHUNK_BOUNDS_CENTRE, CHUNK_BOUNDS_SIZE);
-        chunkMesh.SetIndices(Enumerable.Range(0, chunkMesh.vertexCount).ToArray(), MeshTopology.Points, 0);
 
         palette = new List<Color>();
         for (int index = 0; index < paletteData.GetLength(0); ++index) {
             palette.Add(new Color((float)paletteData[index, 0] / 255.0f, (float)paletteData[index, 1] / 255.0f, (float)paletteData[index, 2] / 255.0f));
         }
 
-        chunkMaterial = new Material(Shader.Find("CarveVR/Chunk"));
-        chunkMaterial.SetFloat("_ChunkSize", CHUNK_SIZE);
-        chunkMaterial.SetInt("_ChunkVoxelSize", CHUNK_VOXEL_SIZE);
-        chunkMaterial.SetInt("_VoxelMethod", (int)method);
-        chunkMaterial.SetBuffer("edgeTable", ChunkManager.marchingCubesEdgeTable);
-        chunkMaterial.SetBuffer("triTable", ChunkManager.marchingCubesTriTable);
-
         countBuffer = new ComputeBuffer(1, sizeof(uint));
-
-        workBuffer = ChunkManager.CreateRenderTexture(CHUNK_VOXEL_SIZE);
-
-        emptyTexture = ChunkManager.CreateEmptyTexture(CHUNK_VOXEL_SIZE);
 
         brushCompute = Resources.Load("Brush") as ComputeShader;
         brushComputePaint = brushCompute.FindKernel("Paint");
@@ -258,6 +227,7 @@ public class VoxelModel : MonoBehaviour {
 
     public void Update() {
         Input();
+        chunkManager.material.SetInt("_VoxelMethod", (int)method);
         chunkManager.material.SetFloat("_Isolevel", isolevel);
     }
 
@@ -314,7 +284,7 @@ public class VoxelModel : MonoBehaviour {
         radius = radius * strength;
         brushCompute.SetFloat("BrushRadius", radius / VOXEL_SIZE);
         brushCompute.SetVector("BrushColour", colour);
-        brushCompute.SetTexture(brushComputePaint, "Out", workBuffer);
+        brushCompute.SetTexture(brushComputePaint, "Out", chunkManager.renderTexture);
         uint[] countBufferData = { 0 };
         countBuffer.SetData(countBufferData);
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);
@@ -332,7 +302,7 @@ public class VoxelModel : MonoBehaviour {
                     Address chunkAddress = new Address(x, y, z);
                     Vector3 chunkVoxelPos = voxelPos - (new Vector3(x, y, z) * CHUNK_VOXEL_SIZE);
                     Chunk oldChunk = null;
-                    Texture3D oldTexture = emptyTexture;
+                    Texture3D oldTexture = chunkManager.emptyTexture;
                     if (chunks.ContainsKey(chunkAddress)) {
                         oldChunk = chunks[chunkAddress];
                         oldTexture = oldChunk.texture;
@@ -344,7 +314,7 @@ public class VoxelModel : MonoBehaviour {
                     brushCompute.SetTexture(brushComputePaint, "In", oldTexture);
                     brushCompute.SetVector("BrushVector", chunkVoxelPos);
                     brushCompute.Dispatch(brushComputePaint, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE, THREAD_GROUP_SIZE);
-                    Graphics.CopyTexture(workBuffer, newChunk.texture);
+                    Graphics.CopyTexture(chunkManager.renderTexture, newChunk.texture);
                     SetChunk(chunkAddress, newChunk);
                 }
             }

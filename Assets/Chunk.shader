@@ -173,6 +173,13 @@
 					}
 					stream.RestartStrip();
 				}
+				OUT.pos = mul(UNITY_MATRIX_MVP, float4(0.0, 0.0, 0.0, 0.0));
+				stream.Append(OUT);
+				OUT.pos = mul(UNITY_MATRIX_MVP, float4(1.0, 0.0, 0.0, 0.0));
+				stream.Append(OUT);
+				OUT.pos = mul(UNITY_MATRIX_MVP, float4(0.0, 1.0, 0.0, 0.0));
+				stream.Append(OUT);
+				stream.RestartStrip();
 			}
 
 			void marchingCubesVoxel(const V2G IN, const float size, inout TriangleStream<G2F> stream) {
