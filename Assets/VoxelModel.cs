@@ -4,14 +4,8 @@ using System.Linq;
 
 //[ExecuteInEditMode]
 public class VoxelModel : MonoBehaviour {
-    const float CHUNK_SIZE = 1.0f;
-    const float CHUNK_HALF_SIZE = CHUNK_SIZE / 2.0f;
-    readonly Vector3 CHUNK_BOUNDS_CENTRE = new Vector3(CHUNK_HALF_SIZE, CHUNK_HALF_SIZE, CHUNK_HALF_SIZE);
-    readonly Vector3 CHUNK_BOUNDS_SIZE = new Vector3(CHUNK_HALF_SIZE, CHUNK_HALF_SIZE, CHUNK_HALF_SIZE);
     const int CHUNK_DEPTH = 4;
     const int CHUNK_VOXEL_SIZE = (int)(0x1u << CHUNK_DEPTH);
-    const int CHUNK_VOXELS = CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE * CHUNK_VOXEL_SIZE;
-    const float VOXEL_SIZE = CHUNK_SIZE / (float)CHUNK_VOXEL_SIZE;
     const int THREAD_GROUP_SIZE = 8;
 
     public struct Address {
@@ -124,9 +118,9 @@ public class VoxelModel : MonoBehaviour {
     };
 
     public void Start() {
-        chunkManager = new ChunkManager(CHUNK_VOXEL_SIZE);
+        chunkManager = new ChunkManager(chunkManager.chunkSize);
 
-        localToVoxelMatrix = Matrix4x4.Scale(new Vector3(VOXEL_SIZE, VOXEL_SIZE, VOXEL_SIZE)).inverse;
+        localToVoxelMatrix = Matrix4x4.Scale(new Vector3(chunkManager.voxelSize, chunkManager.voxelSize, chunkManager.voxelSize)).inverse;
 
         undoStack = new Stack<Dictionary<Address, Chunk>>();
         redoStack = new Stack<Dictionary<Address, Chunk>>();
@@ -282,7 +276,7 @@ public class VoxelModel : MonoBehaviour {
 
     private void Paint(Vector3 pos, float radius, Color colour, float strength) {
         radius = radius * strength;
-        brushCompute.SetFloat("BrushRadius", radius / VOXEL_SIZE);
+        brushCompute.SetFloat("BrushRadius", radius / chunkManager.voxelSize);
         brushCompute.SetVector("BrushColour", colour);
         brushCompute.SetTexture(brushComputePaint, "Out", chunkManager.renderTexture);
         uint[] countBufferData = { 0 };
@@ -290,12 +284,12 @@ public class VoxelModel : MonoBehaviour {
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);
 
         Vector3 voxelPos = localToVoxelMatrix.MultiplyPoint3x4(transform.worldToLocalMatrix.MultiplyPoint3x4(pos));
-        int x0 = Util.DivDown(pos.x - radius, CHUNK_SIZE);
-        int x1 = Util.DivDown(pos.x + radius, CHUNK_SIZE);
-        int y0 = Util.DivDown(pos.y - radius, CHUNK_SIZE);
-        int y1 = Util.DivDown(pos.y + radius, CHUNK_SIZE);
-        int z0 = Util.DivDown(pos.z - radius, CHUNK_SIZE);
-        int z1 = Util.DivDown(pos.z + radius, CHUNK_SIZE);
+        int x0 = Util.DivDown(pos.x - radius, chunkManager.chunkSize);
+        int x1 = Util.DivDown(pos.x + radius, chunkManager.chunkSize);
+        int y0 = Util.DivDown(pos.y - radius, chunkManager.chunkSize);
+        int y1 = Util.DivDown(pos.y + radius, chunkManager.chunkSize);
+        int z0 = Util.DivDown(pos.z - radius, chunkManager.chunkSize);
+        int z1 = Util.DivDown(pos.z + radius, chunkManager.chunkSize);
         for (int z = z0; z <= z1; ++z) {
             for (int y = y0; y <= y1; ++y) {
                 for (int x = x0; x <= x1; ++x) {

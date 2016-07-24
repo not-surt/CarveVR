@@ -31,8 +31,8 @@ class ChunkManager : System.IDisposable {
         }
     }
 
-    private readonly int chunkSize;
-    private readonly float voxelSize;
+    public readonly int chunkSize;
+    public readonly float voxelSize;
     public readonly Mesh mesh;
     public readonly RenderTexture renderTexture;
     public readonly Texture3D emptyTexture;
