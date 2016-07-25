@@ -1,11 +1,16 @@
-﻿Shader "CarveVR/Chunk" {
+﻿// Upgrade NOTE: replaced '_Object2World' with 'unity_ObjectToWorld'
+
+// Upgrade NOTE: replaced '_World2Object' with 'unity_WorldToObject'
+
+Shader "CarveVR/Chunk" {
 	Properties{
 		_ChunkSize("Chunk Size", Float) = 1.0
 		_ChunkVoxelSize("Chunk Voxel Size", Int) = 16
 		_Isolevel("Isosurface level", Range(0.0, 1.0)) = 0.5
-		[KeywordEnum(Blocks, Marching Cubes, Naive Surface Nets, Dual Contouring)] _VoxelMethod("Voxel Method", Int) = 0
+		[KeywordEnum(Billboards, Blocks, Marching Cubes, Naive Surface Nets, Dual Contouring)] _VoxelMethod("Voxel Method", Int) = 1
 		_Data("Voxel Data", 3D) = "white" {}
 		[Toggle]_Smooth("Smooth Normals", Float) = 1.0
+		_BillboardScale("Billboard Scale", Float) = 1.0
 	}
 	SubShader {
 		Pass {
@@ -20,10 +25,13 @@
 			#pragma geometry geometryShader
 			#pragma fragment fragmentShader
 
+			float4x4 _Camera2World;
+
 			const float _ChunkSize;
 			const int _ChunkVoxelSize;
 			const float _Isolevel;
 			const float _Smooth;
+			const float _BillboardScale;
 			Texture3D _Data;
 			Texture3D _Neighborhood[3][3][3];
 			bool _NeighborPresent[3][3][3];
@@ -32,10 +40,11 @@
 			StructuredBuffer<int> edgeTable;
 			StructuredBuffer<int> triTable;
 
-			#define METHOD_BLOCKS 0
-			#define METHOD_MARCHING_CUBES 1
-			#define METHOD_NAIVE_SURFACE_NETS 2
-			#define METHOD_DUAL_CONTOURING 3
+			#define METHOD_BILLBOARDS 0
+			#define METHOD_BLOCKS 1
+			#define METHOD_MARCHING_CUBES 2
+			#define METHOD_NAIVE_SURFACE_NETS 3
+			#define METHOD_DUAL_CONTOURING 4
 			const int _VoxelMethod;
 
 			struct V2G {
@@ -61,6 +70,37 @@
 
 			float isolevelPosition(const float a, const float b, const float isolevel) {
 				return (isolevel - a) / (b - a);
+			}
+
+			void billboardsVoxel(const V2G IN, const float size, inout TriangleStream<G2F> stream) {
+				if (IN.colour.a >= _Isolevel) {
+					const int2 corners[4] = {
+						{ 1, -1 },
+						{ 1,  1 },
+						{ -1, -1 },
+						{ -1,  1 },
+					};
+					const float3 worldPos = mul(unity_ObjectToWorld, IN.pos);
+					const float3 cameraUp = normalize(mul((float3x3)_Camera2World, float3(0.0f, 1.0f, 0.0f)));
+					const float3 look = normalize(_WorldSpaceCameraPos - worldPos);
+					const float3 up = normalize(cameraUp - (look * dot(cameraUp, look)));
+					const float3 right = cross(up, look);
+
+					const float halfSize = 0.5f * size * _BillboardScale;
+					const float3 offset = float3(0.5f, 0.5f, 0.5f) * size;
+
+					const float4x4 projectionMatrix = mul(UNITY_MATRIX_MVP, unity_WorldToObject);
+					G2F OUT;
+					OUT.colour = IN.colour;
+					OUT.diffuse = float4(1.0f, 1.0f, 1.0f, 1.0f);
+					OUT.normal = float3(0.0f, 0.0f, -1.0f);
+					[unroll]
+					for (int corner = 0; corner < 4; ++corner) {
+						OUT.pos = mul(projectionMatrix, float4(worldPos + offset + (halfSize * right * corners[corner].x) + (halfSize * up * corners[corner].y), 1.0f));
+						stream.Append(OUT);
+					}
+					stream.RestartStrip();
+				}
 			}
 
 			void blocksVoxel(const V2G IN, const float size, inout TriangleStream<G2F> stream) {
@@ -91,11 +131,11 @@
 					{  1,  0,  0 },
 				};
 				G2F OUT;
-				OUT.colour = float4(IN.colour.rgb, 1.0);
+				OUT.colour = float4(IN.colour.rgb, 1.0f);
 				for (int boundary = 0; boundary < 6; ++boundary) {
 					//float3 t = corners[sides[boundary][0]] - mul(unity_WorldToObject, _WorldSpaceCameraPos);
 					//const bool cull = !(dot(t, OUT.normal) <= 0);
-					//const bool cull = dot(normalize(ObjSpaceViewDir(IN.pos)), OUT.normal) < 0.0;
+					//const bool cull = dot(normalize(ObjSpaceViewDir(IN.pos)), OUT.normal) < 0.0f;
 					const bool cull = false;
 					const float position = isolevelPosition(_Data.Load(int4(IN.voxel, 0)).a, _Data.Load(int4(IN.voxel + boundaries[boundary], 0)).a, _Isolevel);
 					if (!cull && position >= 0.0 && position <= 1.0) {
@@ -106,7 +146,7 @@
 						OUT.diffuse.rgb += ShadeSH9(half4(worldNormal, 1));
 						[unroll]
 						for (int corner = 0; corner < 4; ++corner) {
-							OUT.pos = mul(UNITY_MATRIX_MVP, IN.pos + float4(corners[sides[boundary][corner]], 0.0) * size);
+							OUT.pos = mul(UNITY_MATRIX_MVP, IN.pos + float4(corners[sides[boundary][corner]], 0.0f) * size);
 							stream.Append(OUT);
 						}
 						stream.RestartStrip();
@@ -118,9 +158,9 @@
 				float mu;
 				float3 p;
 
-				if (abs(isolevel - valp1) < 0.00001) return(p1);
-				if (abs(isolevel - valp2) < 0.00001) return(p2);
-				if (abs(valp1 - valp2) < 0.00001) return(p1);
+				if (abs(isolevel - valp1) < 0.00001f) return(p1);
+				if (abs(isolevel - valp2) < 0.00001f) return(p2);
+				if (abs(valp1 - valp2) < 0.00001f) return(p1);
 				mu = (isolevel - valp1) / (valp2 - valp1);
 				p.x = p1.x + mu * (p2.x - p1.x);
 				p.y = p1.y + mu * (p2.y - p1.y);
@@ -161,23 +201,23 @@
 
 				G2F OUT;
 				//OUT.colour = float4(IN.colour.rgb, 1.0);
-				OUT.normal = float3(1.0, 0.0, 0.0);
-				OUT.colour = float4(1.0, 0.0, 0.0, 1.0);
-				OUT.diffuse = fixed4(1.0, 1.0, 1.0, 1.0);
+				OUT.normal = float3(1.0f, 0.0f, 0.0f);
+				OUT.colour = float4(1.0f, 0.0f, 0.0f, 1.0f);
+				OUT.diffuse = fixed4(1.0f, 1.0f, 1.0f, 1.0f);
 				//triTable[cubeindex][i]
 				for (int i = 0; triTable[cubeindex * 16 + i] != -1; i += 3) {
 					[unroll]
 					for (int vertex = 0; vertex < 3; ++vertex) {
-						OUT.pos = mul(UNITY_MATRIX_MVP, float4(vertlist[triTable[cubeindex * 16 + i + vertex]], 0.0));
+						OUT.pos = mul(UNITY_MATRIX_MVP, float4(vertlist[triTable[cubeindex * 16 + i + vertex]], 0.0f));
 						stream.Append(OUT);
 					}
 					stream.RestartStrip();
 				}
-				OUT.pos = mul(UNITY_MATRIX_MVP, float4(0.0, 0.0, 0.0, 0.0));
+				OUT.pos = mul(UNITY_MATRIX_MVP, float4(0.0f, 0.0f, 0.0f, 0.0f));
 				stream.Append(OUT);
-				OUT.pos = mul(UNITY_MATRIX_MVP, float4(1.0, 0.0, 0.0, 0.0));
+				OUT.pos = mul(UNITY_MATRIX_MVP, float4(1.0f, 0.0f, 0.0f, 0.0f));
 				stream.Append(OUT);
-				OUT.pos = mul(UNITY_MATRIX_MVP, float4(0.0, 1.0, 0.0, 0.0));
+				OUT.pos = mul(UNITY_MATRIX_MVP, float4(0.0f, 1.0f, 0.0f, 0.0f));
 				stream.Append(OUT);
 				stream.RestartStrip();
 			}
@@ -213,6 +253,7 @@
 			void geometryShader(const point V2G IN[1], inout TriangleStream<G2F> stream) {
 				const float voxelSize = _ChunkSize / float(_ChunkVoxelSize);
 				switch (_VoxelMethod) {
+				case METHOD_BILLBOARDS: billboardsVoxel(IN[0], voxelSize, stream); break;
 				case METHOD_BLOCKS: blocksVoxel(IN[0], voxelSize, stream); break;
 				case METHOD_MARCHING_CUBES: marchingCubesVoxel(IN[0], voxelSize, stream); break;
 				case METHOD_NAIVE_SURFACE_NETS: naiveSurfaceNetsVoxel(IN[0], voxelSize, stream); break;
@@ -220,8 +261,14 @@
 				}
 			}
 
-			fixed4 fragmentShader(G2F IN) : SV_Target {
-				return IN.colour *= IN.diffuse;
+			fixed4 fragmentShader(G2F IN) : SV_Target{
+				switch (_VoxelMethod) {
+				case METHOD_BILLBOARDS:
+					return IN.colour * IN.diffuse;
+					break;
+				default:
+					return IN.colour * IN.diffuse;
+				}
 			}
 
 			ENDCG

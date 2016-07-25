@@ -66,11 +66,13 @@ public class VoxelModel : MonoBehaviour {
     }
 
     public enum VoxelMethod {
+        Billboards,
         Blocks,
         MarchingCubes,
         NaiveSurfaceNets,
         DualContouring,
     }
+    private static readonly int VoxelMethodCount = System.Enum.GetNames(typeof(VoxelMethod)).Length;
 
     [SerializeField]
     private float isolevel = 0.5f;
@@ -81,9 +83,6 @@ public class VoxelModel : MonoBehaviour {
     [SerializeField]
     private GameObject controllerManagerObject;
     public GameObject ControllerManagerObject { get { return controllerManagerObject; } set { controllerManagerObject = value; } }
-    [SerializeField]
-    private GameObject chunkManagerObject;
-    public GameObject ChunkManagerObject { get { return chunkManagerObject; } set { chunkManagerObject = value; } }
 
     private ChunkManager chunkManager;
 
@@ -118,7 +117,7 @@ public class VoxelModel : MonoBehaviour {
     };
 
     public void Start() {
-        chunkManager = new ChunkManager(chunkManager.chunkSize);
+        chunkManager = new ChunkManager(16);
 
         localToVoxelMatrix = Matrix4x4.Scale(new Vector3(chunkManager.voxelSize, chunkManager.voxelSize, chunkManager.voxelSize)).inverse;
 
@@ -210,8 +209,8 @@ public class VoxelModel : MonoBehaviour {
         int rightIndex = (int)controllerManager.right.GetComponent<SteamVR_TrackedObject>().index;
         if (rightIndex != -1 && (rightController = SteamVR_Controller.Input(rightIndex)) != null) {
             switch (TouchpadButton(rightController)) {
-                case 1: break;
-                case 2: break;
+                case 1: if ((int)--method < 0) method += VoxelMethodCount; break;
+                case 2: if ((int)++method >= VoxelMethodCount) method -= VoxelMethodCount; break;
                 case 3: if ((isolevel -= 0.1f) < 0.0f) isolevel += 1.0f; break;
                 case 4: if ((isolevel += 0.1f) >= 1.0f) isolevel -= 1.0f; break;
             }
@@ -284,12 +283,13 @@ public class VoxelModel : MonoBehaviour {
         brushCompute.SetBuffer(brushComputePaint, "Count", countBuffer);
 
         Vector3 voxelPos = localToVoxelMatrix.MultiplyPoint3x4(transform.worldToLocalMatrix.MultiplyPoint3x4(pos));
-        int x0 = Util.DivDown(pos.x - radius, chunkManager.chunkSize);
-        int x1 = Util.DivDown(pos.x + radius, chunkManager.chunkSize);
-        int y0 = Util.DivDown(pos.y - radius, chunkManager.chunkSize);
-        int y1 = Util.DivDown(pos.y + radius, chunkManager.chunkSize);
-        int z0 = Util.DivDown(pos.z - radius, chunkManager.chunkSize);
-        int z1 = Util.DivDown(pos.z + radius, chunkManager.chunkSize);
+        int x0 = Util.DivDown(pos.x - radius, 1.0f);
+        int x1 = Util.DivDown(pos.x + radius, 1.0f);
+        int y0 = Util.DivDown(pos.y - radius, 1.0f);
+        int y1 = Util.DivDown(pos.y + radius, 1.0f);
+        int z0 = Util.DivDown(pos.z - radius, 1.0f);
+        int z1 = Util.DivDown(pos.z + radius, 1.0f);
+        print(x0 + "," + x1 + " " + y0 + "," + y1 + " " + z0 + "," + z1);
         for (int z = z0; z <= z1; ++z) {
             for (int y = y0; y <= y1; ++y) {
                 for (int x = x0; x <= x1; ++x) {
