@@ -1,2 +1,2 @@
 # CarveVR
-Smooth Voxel Sculpting in VR with Unity and SteamVR
+**Abandoned** Voxel Sculpting in VR with Unity and SteamVR
